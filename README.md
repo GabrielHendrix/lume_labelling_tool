@@ -3,7 +3,7 @@
 
 ## Installation
 
-### LLT needs to be installed first before use. The code requires cuda 12.1 [CUDA 12.1 Installation](https://github.com/LumeRobotics/docs/blob/main/Installations/instaling_CUDA_12.1.md), `python>=3.10`, as well as `torch>=2.5.1` and `torchvision>=0.20.1`. 
+#### LLT needs to be installed first before use. The code requires cuda 12.1 [Installation](https://github.com/LumeRobotics/docs/blob/main/Installations/instaling_CUDA_12.1.md), `python>=3.10`, as well as `torch>=2.5.1` and `torchvision>=0.20.1`. 
 
 First, install Python 3.10:
 

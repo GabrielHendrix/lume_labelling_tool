@@ -1,19 +1,14 @@
 import os
-import sys
-# virtualenv_root = "./venv/local"
-
-# def activate_virtual_environment(environment_root):
-#     # print("""Configures the virtual environment starting at ``environment_root``.\n\n""")
-#     print("Activating Venv = " + environment_root)
-#     activate_script = os.path.join(
-#         environment_root, 'bin', 'activate_this.py')
-#     print("activate_script = " + activate_script)
-#     exec(compile(open(activate_script, "rb").read(), activate_script, 'exec'), dict(__file__=activate_script))
-#     print("venv activated")
-    
-# activate_virtual_environment(virtualenv_root)
-
 import cv2
+import sys
+import math
+import glob
+import torch
+import pickle
+import numpy as np
+from sam2.build_sam import build_sam2_video_predictor
+from image_and_video_generator_from_log import ImagesFromLog
+
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import Qt
@@ -34,19 +29,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
-
-# if using Apple MPS, fall back to CPU for unsupported ops
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-import numpy as np
-import torch
-import cv2
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.build_sam import build_sam2_video_predictor
-
-import argparse
-import glob
-import math
 
 # select the device for computation
 if torch.cuda.is_available():
@@ -89,6 +72,13 @@ def get_initial_paths():
         sys.exit()
 
     return img_path, outdir
+
+
+# Converter todos os ndarrays para listas
+def ndarray_converter(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Tipo {type(obj)} não é serializável para JSON")
 
 
 def dist2p(p0, p1):
@@ -190,40 +180,64 @@ class InputDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Configuração Inicial")
         self.setModal(True)
-
+        self.is_checked = False
         self.img_path = ""
-        self.outdir = ""
-
-        layout = QVBoxLayout()
+        self.outdir = "/home/lume/Desktop/"
+        self.camera_id = 1
+        self.layout = QVBoxLayout()
 
         # Caminho da imagem
         self.img_path_edit = QLineEdit()
-        img_path_btn = QPushButton("Selecionar Pasta de Imagens")
-        img_path_btn.clicked.connect(self.select_img_path)
+        self.img_path_btn = QPushButton("Selecionar Pasta de Imagens")
+        self.img_path_btn.clicked.connect(self.select_img_path)
 
         # Caminho de saída
         self.outdir_edit = QLineEdit()
-        outdir_btn = QPushButton("Selecionar Pasta de Saída")
-        outdir_btn.clicked.connect(self.select_outdir)
+        self.outdir_edit.setText(self.outdir)
+        self.outdir_btn = QPushButton("Selecionar Pasta de Saída")
+        self.outdir_btn.clicked.connect(self.select_outdir) 
 
         # Botão iniciar
         start_btn = QPushButton("Iniciar")
         start_btn.clicked.connect(self.accept)
-        layout.addWidget(start_btn)
+        self.layout.addWidget(start_btn)
 
-        self.img_path_title = QLabel("Caminho das Imagens:")
-        layout.addWidget(self.img_path_title)
-        layout.addWidget(self.img_path_edit)
-        layout.addWidget(img_path_btn)
+        self.img_path_title = QLabel("Caminho de Entrada:")
+        self.layout.addWidget(self.img_path_title)
+        self.layout.addWidget(self.img_path_edit)
+        self.layout.addWidget(self.img_path_btn)
 
         self.outdir_title = QLabel("Caminho de Saída:")
-        layout.addWidget(self.outdir_title)
-        layout.addWidget(self.outdir_edit)
-        layout.addWidget(outdir_btn)
+        self.layout.addWidget(self.outdir_title)
+        self.layout.addWidget(self.outdir_edit)
+        self.layout.addWidget(self.outdir_btn)
+        self.outdir_title.setVisible(False)
+        self.outdir_edit.setVisible(False)
+        self.outdir_btn.setVisible(False)
 
-        self.setLayout(layout)
+        # Numero da camera
+        self.camera_box_title = QLabel("Camera ID:")
+        self.camera_box = QComboBox()
+        self.layout.addWidget(self.camera_box_title)
+        self.layout.addWidget(self.camera_box)
+        self.camera_box.addItems(['1','2','3','4','5'])
+        self.camera_box.setCurrentText(str(self.camera_id))
+        self.camera_box.currentTextChanged.connect(self.update_camera_id)
+        self.camera_box_title.setVisible(False)
+        self.camera_box.setVisible(False)
+
+        # Checkbox para controlar a visibilidade do campo
+        self.use_outdir_checkbox = QCheckBox("Converter imagens a partir do log")
+        self.use_outdir_checkbox.stateChanged.connect(self.toggle_outdir_edit)
+        self.layout.addWidget(self.use_outdir_checkbox)
+
+        self.setLayout(self.layout)
         self.adjustSize()               # Ajusta o tamanho da janela ao conteúdo
         self.setFixedSize(self.size())  # Define o tamanho como fixo
+
+    def update_camera_id(self, new_id):
+        if new_id.isdigit():
+            self.camera_id = int(new_id)
 
     def select_img_path(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Imagens")
@@ -236,27 +250,49 @@ class InputDialog(QDialog):
             self.outdir_edit.setText(folder)
 
     def get_paths(self):
-        return self.img_path_edit.text().strip(), self.outdir_edit.text().strip()
+        return self.img_path_edit.text().strip(), self.outdir_edit.text().strip(), self.is_checked, int(self.camera_id)
+
+
+    def toggle_outdir_edit(self, state):
+        self.is_checked = (state == Qt.CheckState.Checked.value)
+        if (self.is_checked):
+            # self.layout.addWidget(self.outdir_title)
+            # self.layout.addWidget(self.outdir_edit)
+            # self.layout.addWidget(self.outdir_btn)
+            self.outdir_title.setVisible(self.is_checked)
+            self.outdir_edit.setVisible(self.is_checked)
+            self.outdir_btn.setVisible(self.is_checked)
+            self.camera_box_title.setVisible(self.is_checked)
+            self.camera_box.setVisible(self.is_checked)
+            # self.outdir_edit.show()
+            
+        else:
+            self.outdir_title.setVisible(self.is_checked)
+            self.outdir_edit.setVisible(self.is_checked)
+            self.outdir_btn.setVisible(self.is_checked)
+            self.camera_box_title.setVisible(self.is_checked)
+            self.camera_box.setVisible(self.is_checked)
+        self.setLayout(self.layout)
+        self.adjustSize()               # Ajusta o tamanho da janela ao conteúdo
+        self.setFixedSize(self.size())  # Define o tamanho como fixo
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, img_path, outdir):
+    def __init__(self, img_path):
         super().__init__()
 
         self.setWindowTitle("Visualizador de Imagens")
         self.img_path = img_path
-        self.outdir = outdir
         self.model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
         self.predictor = build_sam2_video_predictor(self.model_cfg, "../sam2/checkpoints/sam2.1_hiera_large.pt", device=device)    
         self.obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
         self.idx = 0
-        self.data = {}
         self.input_points = []
         self.input_labels = []
-        self.objs_ids = {'1':None}
         self.predict = False
         self.show_all = False
-        
+        self.objs_ids = {'1':None}
+        self.data = {}
         self.all_classes = ["pedestrian", "car", "truck", "bus"]  # Exemplo
 
         if os.path.isfile(self.img_path):
@@ -268,18 +304,16 @@ class MainWindow(QMainWindow):
         else:
             self.filenames = glob.glob(os.path.join(self.img_path, '**/*'), recursive=True)
         
-        os.makedirs(self.outdir, exist_ok=True)
-
         self.filenames.sort()
+        if os.path.isfile((os.path.join(self.img_path, "data.pkl"))):
+            self.load_data()
+            key = str(self.filenames[self.idx].split("/")[-1])
 
-        # scan all the JPEG frame names in this directory
-        frame_names = [
-            p for p in os.listdir(self.img_path)
-            if os.path.splitext(p)[-1] in [".png", ".jpg", ".jpeg", ".JPG", ".JPEG"]
-        ]
-        frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
-    
-        self.inference_state = self.predictor.init_state(video_path=self.img_path)
+            self.objs_ids = self.data[key]
+        else:
+            self.objs_ids = {'1':None}
+        # self.filenames = self.filenames[self.idx:self.idx+100]
+        self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
 
         # Layouts principais
         main_layout = QVBoxLayout()
@@ -431,7 +465,7 @@ class MainWindow(QMainWindow):
 
                 _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
                     inference_state=self.inference_state,
-                    frame_idx=self.idx,
+                    frame_idx=self.idx % len(self.inference_state["images"]),
                     obj_id=self.obj_id,
                     points=local_input_points,
                     labels=local_input_labels,
@@ -452,44 +486,34 @@ class MainWindow(QMainWindow):
         video_segments = {}  # video_segments contains the per-frame segmentation results
 
         if (len(self.inference_state['obj_ids']) > 0):
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.idx, max_frame_num_to_track=1, reverse=reverse):
+            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.idx % len(self.inference_state["images"]), max_frame_num_to_track=0, reverse=reverse):
                 video_segments[out_frame_idx] = {
                     out_obj_id: out_mask_logits
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-                cv_img = cv2.imread(self.filenames[out_frame_idx])
-                self.idx = out_frame_idx
+                self.idx = self.idx - self.idx % len(self.inference_state["images"])
+                self.idx += out_frame_idx
+                cv_img = cv2.imread(self.filenames[self.idx])
                 cv_img, contours, masks, bbox = show_masks(cv_img, out_mask_logits, point_coords=self.input_points, input_labels=self.input_labels, borders=True)
                 self.insert_info(contours, masks, bbox)
         # else:
             # ADICIONAR JANELA DE ERRO AQUI
 
     def wheelEvent(self, event):
-        angle = event.angleDelta().y()
-        
-        if ((angle > 0) and (self.idx < (len(self.filenames) - 1))):
-            # print("Scroll para cima → próxima imagem")
-            self.idx += 1  # avançar
-            if (self.predict):
-                self.predict_next_image()
-        elif ((angle < 0) and (self.idx > 0)):
-            # print("Scroll para baixo → imagem anterior")
-            self.idx -= 1  # voltar
-            if (self.predict):
-                self.predict_next_image(True)
-        
-        if (self.show_all):
-            self.update_image(self.objs_ids.keys())
-        else:
-            self.update_image([self.obj_id])
+        angle = event.angleDelta().y()        
+        if (angle > 0):
+            self.show_next_image()
+        elif (angle < 0):
+            self.show_previous_image()
 
 
     def insert_info(self, contours, masks, bbox):
+        selected_class = None
         key = str(self.filenames[self.idx].split("/")[-1])
+
         if (key not in self.data):
             self.data.update({key: {}})        
 
-        print(self.objs_ids[str(self.obj_id)])
         if (self.objs_ids[str(self.obj_id)] is None):
             dialog = ClassSelectionDialog(self.all_classes, self)
             if dialog.exec():
@@ -498,7 +522,7 @@ class MainWindow(QMainWindow):
         else:
             selected_class = self.objs_ids[str(self.obj_id)]
 
-        if (key in self.data):
+        if ((key in self.data) and (selected_class is not None)):
             if (str(self.obj_id) in self.data[key]): 
                 self.data[key][str(self.obj_id)]["class"] = selected_class
                 self.data[key][str(self.obj_id)]["masks"] = masks
@@ -506,15 +530,13 @@ class MainWindow(QMainWindow):
                 self.data[key][str(self.obj_id)]["bbox"] = bbox
         
         
-        if (str(self.obj_id) not in self.data[key]): 
+        if ((str(self.obj_id) not in self.data[key]) and (selected_class is not None)): 
             self.data[key].update({str(self.obj_id): {
                                 "class": selected_class,
                                 "masks": masks,
                                 "contours": contours,
                                 "bbox": bbox
                             }})
-            
-
 
 
     def delete_id(self):
@@ -528,27 +550,30 @@ class MainWindow(QMainWindow):
         if 0 <= self.idx < len(self.filenames):
             cv_img = cv2.imread(self.filenames[self.idx])
             key = str(self.filenames[self.idx].split("/")[-1])
+
             if (str(key) in self.data):
                 for obj_id in objs_ids:
                     if (str(obj_id) in self.data[key]): 
-                        if (self.data[key][str(obj_id)]["contours"] is not None):
-                            x, y, w, h = self.data[key][str(obj_id)]["bbox"]
-                            cv2.rectangle(cv_img, (x, y), (x+w, y+h), (0, 0, 255), 2)  # Caixa vermelha
-                            cv2.drawContours(cv_img, self.data[key][str(obj_id)]["contours"], -1, (0, 255, 255), 2)
-                                
-                            # Desenha pontos se existirem
-                            if self.input_points is not None:
-                                assert self.input_labels is not None
-                                for point, label in zip(self.input_points, self.input_labels):
-                                    # Verifique se as coordenadas do ponto são válidas
-                                    point = tuple(map(int, point))  # Garante que as coordenadas sejam inteiras
+                        if ("contours" in self.data[key][str(obj_id)]):
+                            if (self.data[key][str(obj_id)]["contours"] is not None):
+                                x, y, w, h = self.data[key][str(obj_id)]["bbox"]
+                                cv2.rectangle(cv_img, (x, y), (x+w, y+h), (0, 0, 255), 2)  # Caixa vermelha
+                                cv2.drawContours(cv_img, self.data[key][str(obj_id)]["contours"], -1, (0, 255, 255), 2)
+                                    
+                                # Desenha pontos se existirem
+                                if self.input_points is not None:
+                                    assert self.input_labels is not None
+                                    for point, label in zip(self.input_points, self.input_labels):
+                                        # Verifique se as coordenadas do ponto são válidas
+                                        point = tuple(map(int, point))  # Garante que as coordenadas sejam inteiras
 
-                                    # Desenhe o ponto e o rótulo
-                                    cv2.circle(cv_img, point, radius=2, color=(255, 0, 0), thickness=-1)  # Ponto vermelho
+                                        # Desenhe o ponto e o rótulo
+                                        cv2.circle(cv_img, point, radius=2, color=(255, 0, 0), thickness=-1)  # Ponto vermelho
             
             if cv_img is not None:
                 pixmap = cv_image_to_pixmap(cv_img)
                 self.image_label.setPixmap(pixmap)
+                self.save_data()
             else:
                 print(f"Erro ao carregar imagem: {self.filenames[self.idx]}")
         self.update_combobox_ids()
@@ -556,14 +581,44 @@ class MainWindow(QMainWindow):
 
     def show_previous_image(self):
         if self.idx > 0:
-            self.idx -= 1
+            self.idx -= 1  # voltar
+            if ((self.idx % 100) == 0 and (self.idx != 0)):
+                self.predictor.reset_state(self.inference_state)
+                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
+            if (self.predict):
+                self.predict_next_image(True)
+        if (self.show_all):
+            self.update_image(self.objs_ids.keys())
+        else:
             self.update_image([self.obj_id])
 
 
     def show_next_image(self):
         if self.idx < len(self.filenames) - 1:
-            self.idx += 1
+            self.idx += 1  # avançar
+            if ((self.idx % 100) == 0):
+                self.predictor.reset_state(self.inference_state)
+                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
+            if (self.predict):
+                self.predict_next_image()
+
+        if (self.show_all):
+            self.update_image(self.objs_ids.keys())
+        else:
             self.update_image([self.obj_id])
+
+
+    def save_data(self):
+        with open(os.path.join(self.img_path, "data.pkl"), "wb") as f:
+            pickle.dump(self.data, f)
+
+
+    def load_data(self):
+        with open(os.path.join(self.img_path, "data.pkl"), "rb") as f:
+            self.data = pickle.load(f)
+        # # Salvando em um arquivo JSON
+        # with open(os.path.join(self.img_path, "dados.json"), "w", encoding="utf-8") as f:
+        #     json.dump(self.data, f, default=ndarray_converter, ensure_ascii=False, indent=4)
 
 
 app = QApplication(sys.argv)
@@ -571,9 +626,14 @@ app = QApplication(sys.argv)
 # Abre o diálogo inicial
 dialog = InputDialog()
 if dialog.exec():
-    img_path, outdir = dialog.get_paths()
-    if img_path and outdir:
-        window = MainWindow(img_path, outdir)
+    img_path, outdir, from_log, camera_id = dialog.get_paths()
+    if from_log:
+        outdir = os.path.join(outdir, img_path.split("/")[-1])
+        image_conversor = ImagesFromLog(img_path, outdir, camera_id)
+        image_conversor.process()
+        img_path = outdir
+    if img_path:
+        window = MainWindow(img_path)
         window.show()
         sys.exit(app.exec())
     else:

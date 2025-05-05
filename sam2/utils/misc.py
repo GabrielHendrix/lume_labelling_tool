@@ -173,6 +173,7 @@ def load_video_frames(
     video_path,
     image_size,
     offload_video_to_cpu,
+    idx,
     img_mean=(0.485, 0.456, 0.406),
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
@@ -190,6 +191,7 @@ def load_video_frames(
             video_path=video_path,
             image_size=image_size,
             offload_video_to_cpu=offload_video_to_cpu,
+            index=idx,
             img_mean=img_mean,
             img_std=img_std,
             compute_device=compute_device,
@@ -199,6 +201,7 @@ def load_video_frames(
             video_path=video_path,
             image_size=image_size,
             offload_video_to_cpu=offload_video_to_cpu,
+            index=idx,
             img_mean=img_mean,
             img_std=img_std,
             async_loading_frames=async_loading_frames,
@@ -214,6 +217,7 @@ def load_video_frames_from_jpg_images(
     video_path,
     image_size,
     offload_video_to_cpu,
+    index,
     img_mean=(0.485, 0.456, 0.406),
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
@@ -245,7 +249,11 @@ def load_video_frames_from_jpg_images(
         for p in os.listdir(jpg_folder)
         if os.path.splitext(p)[-1] in [".jpg", ".png", ".jpeg", ".JPG", ".JPEG"]
     ]
-    frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+    frame_names.sort(key=lambda p: (os.path.splitext(p)[0]))
+    if (len(frame_names) < (index+100)):
+        frame_names = frame_names[index:len(frame_names)]
+    else:
+        frame_names = frame_names[index:index+100]
     num_frames = len(frame_names)
     if num_frames == 0:
         raise RuntimeError(f"no images found in {jpg_folder}")

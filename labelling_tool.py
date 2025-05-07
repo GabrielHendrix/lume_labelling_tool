@@ -307,11 +307,9 @@ class MainWindow(QMainWindow):
         self.filenames.sort()
         if os.path.isfile((os.path.join(self.img_path, "data.pkl"))):
             self.load_data()
-            key = str(self.filenames[self.idx].split("/")[-1])
-
-            self.objs_ids = self.data[key]
         else:
             self.objs_ids = {'1':None}
+            self.data.update({'objs_ids': self.objs_ids})        
         # self.filenames = self.filenames[self.idx:self.idx+100]
         self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
 
@@ -548,6 +546,7 @@ class MainWindow(QMainWindow):
 
     def update_image(self, objs_ids):
         if 0 <= self.idx < len(self.filenames):
+            self.frame_index_edit.setText(str(self.idx))
             cv_img = cv2.imread(self.filenames[self.idx])
             key = str(self.filenames[self.idx].split("/")[-1])
 
@@ -584,7 +583,7 @@ class MainWindow(QMainWindow):
             self.idx -= 1  # voltar
             if ((self.idx % 100) == 0 and (self.idx != 0)):
                 self.predictor.reset_state(self.inference_state)
-                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
+                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx-100)
             if (self.predict):
                 self.predict_next_image(True)
         if (self.show_all):
@@ -616,6 +615,11 @@ class MainWindow(QMainWindow):
     def load_data(self):
         with open(os.path.join(self.img_path, "data.pkl"), "rb") as f:
             self.data = pickle.load(f)
+        # for i, file in enumerate(self.filenames):
+        key = str(self.filenames[self.idx].split("/")[-1])
+        if 'objs_ids' in self.data:
+            self.objs_ids = self.data['objs_ids']
+    
         # # Salvando em um arquivo JSON
         # with open(os.path.join(self.img_path, "dados.json"), "w", encoding="utf-8") as f:
         #     json.dump(self.data, f, default=ndarray_converter, ensure_ascii=False, indent=4)

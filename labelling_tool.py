@@ -6,6 +6,7 @@ import glob
 import torch
 import pickle
 import numpy as np
+from natsort import natsorted
 from sam2.build_sam import build_sam2_video_predictor
 from image_and_video_generator_from_log import ImagesFromLog
 
@@ -294,6 +295,7 @@ class MainWindow(QMainWindow):
         self.objs_ids = {'1':None}
         self.data = {}
         self.all_classes = ["pedestrian", "car", "truck", "bus"]  # Exemplo
+        self.interval = 100
 
         if os.path.isfile(self.img_path):
             if self.img_path.endswith('txt'):
@@ -304,14 +306,16 @@ class MainWindow(QMainWindow):
         else:
             self.filenames = glob.glob(os.path.join(self.img_path, '**/*'), recursive=True)
         
-        self.filenames.sort()
+        # self.filenames.sort()
+        self.filenames = natsorted(self.filenames)
+
         if os.path.isfile((os.path.join(self.img_path, "data.pkl"))):
             self.load_data()
         else:
             self.objs_ids = {'1':None}
             self.data.update({'objs_ids': self.objs_ids})        
-        # self.filenames = self.filenames[self.idx:self.idx+100]
-        self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
+        # self.filenames = self.filenames[self.idx:self.idx+self.interval]
+        self.inference_state = self.predictor.init_state(video_path=self.img_path, frame_names=self.filenames[self.idx:(self.idx + self.interval)], index=self.idx)
 
         # Layouts principais
         main_layout = QVBoxLayout()
@@ -401,8 +405,21 @@ class MainWindow(QMainWindow):
     def on_confirm(self):
         text = self.frame_index_edit.text().strip()
         if text:
-            self.idx = int(text)
-            self.update_image([self.obj_id])
+            new_idx = int(text)
+            cents_new_idx    = (abs(new_idx) // 100) % 10
+            cents_idx        = (abs(self.idx) // 100) % 10
+            if cents_new_idx == cents_idx:
+                self.idx = new_idx
+                self.update_image([self.obj_id])
+            else:
+                if cents_new_idx == 0:
+                    self.idx = 99
+                    self.show_previous_image()
+                else:
+                    self.idx = (cents_new_idx * 100)
+                    self.show_next_image()
+                self.idx = new_idx
+                self.update_image([self.obj_id])
 
 
     def increment_object_id(self):
@@ -463,7 +480,7 @@ class MainWindow(QMainWindow):
 
                 _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
                     inference_state=self.inference_state,
-                    frame_idx=self.idx % len(self.inference_state["images"]),
+                    frame_idx=self.idx % self.interval, #len(self.inference_state["images"]),
                     obj_id=self.obj_id,
                     points=local_input_points,
                     labels=local_input_labels,
@@ -484,12 +501,12 @@ class MainWindow(QMainWindow):
         video_segments = {}  # video_segments contains the per-frame segmentation results
 
         if (len(self.inference_state['obj_ids']) > 0):
-            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.idx % len(self.inference_state["images"]), max_frame_num_to_track=0, reverse=reverse):
+            for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(self.inference_state, start_frame_idx=self.idx % self.interval, max_frame_num_to_track=0, reverse=reverse):
                 video_segments[out_frame_idx] = {
                     out_obj_id: out_mask_logits
                     for i, out_obj_id in enumerate(out_obj_ids)
                 }
-                self.idx = self.idx - self.idx % len(self.inference_state["images"])
+                self.idx = self.idx - self.idx % self.interval
                 self.idx += out_frame_idx
                 cv_img = cv2.imread(self.filenames[self.idx])
                 cv_img, contours, masks, bbox = show_masks(cv_img, out_mask_logits, point_coords=self.input_points, input_labels=self.input_labels, borders=True)
@@ -500,8 +517,12 @@ class MainWindow(QMainWindow):
     def wheelEvent(self, event):
         angle = event.angleDelta().y()        
         if (angle > 0):
+            if self.idx < len(self.filenames) - 1:
+                self.idx += 1  # avançar
             self.show_next_image()
         elif (angle < 0):
+            if self.idx > 0:
+                self.idx -= 1  # voltar
             self.show_previous_image()
 
 
@@ -546,7 +567,7 @@ class MainWindow(QMainWindow):
 
     def update_image(self, objs_ids):
         if 0 <= self.idx < len(self.filenames):
-            self.frame_index_edit.setText(str(self.idx))
+            self.frame_index_edit.setText(str(self.idx))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
             cv_img = cv2.imread(self.filenames[self.idx])
             key = str(self.filenames[self.idx].split("/")[-1])
 
@@ -577,15 +598,42 @@ class MainWindow(QMainWindow):
                 print(f"Erro ao carregar imagem: {self.filenames[self.idx]}")
         self.update_combobox_ids()
     
+    def centroid_calc(self, idx):
+        key = str(self.filenames[idx].split("/")[-1])
+        cx = cy = -1
+        if (key in self.data):
+            if (str(self.obj_id) in self.data[key]):
+                if "contours" in self.data[key][str(self.obj_id)]:
+                    contours = self.data[key][str(self.obj_id)]["contours"]
+                    for contour in contours:
+                        # Calcula os momentos
+                        moments = cv2.moments(contour)
+
+                        # Verifica se a área (M["m00"]) não é zero para evitar divisão por zero
+                        if moments["m00"] != 0:
+                            cx = int(moments["m10"] / moments["m00"])  # Coordenada x do centro de massa
+                            cy = int(moments["m01"] / moments["m00"])  # Coordenada y do centro de massa
+        return cx, cy
+
 
     def show_previous_image(self):
-        if self.idx > 0:
-            self.idx -= 1  # voltar
-            if ((self.idx % 100) == 0 and (self.idx != 0)):
-                self.predictor.reset_state(self.inference_state)
-                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx-100)
-            if (self.predict):
-                self.predict_next_image(True)
+        # if self.idx > 0:
+        #     self.idx -= 1  # voltar
+        if ((self.idx % self.interval) == 99 and (self.idx != 0)):
+            self.predictor.reset_state(self.inference_state)
+            self.inference_state = self.predictor.init_state(video_path=self.img_path, frame_names=self.filenames[(self.idx - (self.idx % self.interval)):self.idx+1], index=self.idx-self.interval)
+            if (self.inference_state["obj_id_to_idx"].get(self.obj_id, None) is None) and (self.idx + 1 >= 0):
+                cx, cy = self.centroid_calc(self.idx + 1)
+                if cx != -1:
+                    _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                        inference_state=self.inference_state,
+                        frame_idx=self.idx % self.interval,
+                        obj_id=self.obj_id,
+                        points=[[cx, cy]],
+                        labels=[1],
+                    )
+        if (self.predict):
+            self.predict_next_image(True)
         if (self.show_all):
             self.update_image(self.objs_ids.keys())
         else:
@@ -593,13 +641,26 @@ class MainWindow(QMainWindow):
 
 
     def show_next_image(self):
-        if self.idx < len(self.filenames) - 1:
-            self.idx += 1  # avançar
-            if ((self.idx % 100) == 0):
-                self.predictor.reset_state(self.inference_state)
-                self.inference_state = self.predictor.init_state(video_path=self.img_path, index=self.idx)
-            if (self.predict):
-                self.predict_next_image()
+        # if self.idx < len(self.filenames) - 1:
+        #     self.idx += 1  # avançar
+        if ((self.idx % self.interval) == 0):
+            self.predictor.reset_state(self.inference_state)
+            if (self.idx + self.interval) < len(self.filenames) - 1:
+                self.inference_state = self.predictor.init_state(video_path=self.img_path, frame_names=self.filenames[self.idx:(self.idx + self.interval)], index=self.idx)
+            else:
+                self.inference_state = self.predictor.init_state(video_path=self.img_path, frame_names=self.filenames[self.idx:-1], index=self.idx)
+            if (self.inference_state["obj_id_to_idx"].get(self.obj_id, None) is None) and (self.idx - 1 >= 0):
+                cx, cy = self.centroid_calc(self.idx - 1)
+                if cx != -1:
+                    _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                        inference_state=self.inference_state,
+                        frame_idx=self.idx % self.interval,
+                        obj_id=self.obj_id,
+                        points=[[cx, cy]],
+                        labels=[1],
+                    )
+        if (self.predict):
+            self.predict_next_image()
 
         if (self.show_all):
             self.update_image(self.objs_ids.keys())

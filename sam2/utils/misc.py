@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-
+from natsort import natsorted
 
 def get_sdpa_settings():
     if torch.cuda.is_available():
@@ -174,6 +174,7 @@ def load_video_frames(
     image_size,
     offload_video_to_cpu,
     idx,
+    frame_names,
     img_mean=(0.485, 0.456, 0.406),
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
@@ -196,12 +197,14 @@ def load_video_frames(
             img_std=img_std,
             compute_device=compute_device,
         )
-    elif is_str and os.path.isdir(video_path):
+    elif is_str: #and os.path.isdir(video_path):
+    # elif is_str and os.path.isdir(video_path):
         return load_video_frames_from_jpg_images(
             video_path=video_path,
             image_size=image_size,
             offload_video_to_cpu=offload_video_to_cpu,
             index=idx,
+            frame_names=frame_names,
             img_mean=img_mean,
             img_std=img_std,
             async_loading_frames=async_loading_frames,
@@ -218,6 +221,7 @@ def load_video_frames_from_jpg_images(
     image_size,
     offload_video_to_cpu,
     index,
+    frame_names,
     img_mean=(0.485, 0.456, 0.406),
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
@@ -244,16 +248,18 @@ def load_video_frames_from_jpg_images(
             "ffmpeg to start the JPEG file from 00000.jpg."
         )
 
-    frame_names = [
-        p
-        for p in os.listdir(jpg_folder)
-        if os.path.splitext(p)[-1] in [".jpg", ".png", ".jpeg", ".JPG", ".JPEG"]
-    ]
-    frame_names.sort(key=lambda p: (os.path.splitext(p)[0]))
-    if (len(frame_names) < (index+100)):
-        frame_names = frame_names[index:len(frame_names)]
-    else:
-        frame_names = frame_names[index:index+100]
+    # frame_names = [
+    #     p
+    #     for p in os.listdir(jpg_folder)
+    #     if os.path.splitext(p)[-1] in [".jpg", ".png", ".jpeg", ".JPG", ".JPEG"]
+    # ]
+    # frame_names = natsorted(frame_names)
+    # frame_names.sort(key=lambda p: (os.path.splitext(p)[0]))
+    # if (len(frame_names) < (index+100)):
+    #     frame_names = frame_names[index:len(frame_names)]
+    #     print(len(frame_names))
+    # else:
+    #     frame_names = frame_names[index:index+100]
     num_frames = len(frame_names)
     if num_frames == 0:
         raise RuntimeError(f"no images found in {jpg_folder}")

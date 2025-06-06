@@ -9,6 +9,8 @@ import numpy as np
 from natsort import natsorted
 from sam2.build_sam import build_sam2_video_predictor
 from image_and_video_generator_from_log import ImagesFromLog
+import shutil
+import datetime
 
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import pyqtSignal
@@ -284,8 +286,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Visualizador de Imagens")
         self.img_path = img_path
-        self.model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
-        self.predictor = build_sam2_video_predictor(self.model_cfg, "../sam2/checkpoints/sam2.1_hiera_large.pt", device=device)    
+        self.model_cfg = "configs/sam2.1/sam2.1_hiera_s.yaml"
+        self.predictor = build_sam2_video_predictor(self.model_cfg, "checkpoints/sam2.1_hiera_small.pt", device=device)
         self.obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
         self.idx = 0
         self.input_points = []
@@ -353,6 +355,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.combo_box, 1, 2)
         layout.addWidget(self.new_id, 2, 2) 
 
+        # Botão para deletar o objeto atual
+        self.delete_id_btn = QPushButton("Delete Object")
+        self.delete_id_btn.clicked.connect(self.delete_current_object)
+        layout.addWidget(self.delete_id_btn, 3, 2)
 
         # ComboBox e título
         self.frame_index_edit_title = QLabel("Frame Index:")
@@ -381,10 +387,19 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_P:
-            self.on_predict_mode_checkbox_change(self.predict_mode_checkbox.isChecked())
+            # Alterna o estado do checkbox
+            self.predict_mode_checkbox.setChecked(not self.predict_mode_checkbox.isChecked())
         if event.key() == Qt.Key.Key_H:
-            self.on_show_all_checkbox_change()
-        # elif event.key() == Qt.Key_Left:
+            # Alterna o estado do checkbox
+            self.show_all_checkbox.setChecked(not self.show_all_checkbox.isChecked())
+        elif event.key() == Qt.Key.Key_A:
+            if self.idx > 0:
+                self.idx -= 1  # voltar
+            self.show_previous_image()
+        elif event.key() == Qt.Key.Key_D:
+            if self.idx < len(self.filenames) - 1:
+                self.idx += 1  # avançar
+            self.show_next_image()
 
 
     def on_show_all_checkbox_change(self, state):
@@ -605,14 +620,16 @@ class MainWindow(QMainWindow):
             if (str(self.obj_id) in self.data[key]):
                 if "contours" in self.data[key][str(self.obj_id)]:
                     contours = self.data[key][str(self.obj_id)]["contours"]
-                    for contour in contours:
-                        # Calcula os momentos
-                        moments = cv2.moments(contour)
+                    print("contours ", contours)
+                    if (contours != None):
+                        for contour in contours:
+                            # Calcula os momentos
+                            moments = cv2.moments(contour)
 
-                        # Verifica se a área (M["m00"]) não é zero para evitar divisão por zero
-                        if moments["m00"] != 0:
-                            cx = int(moments["m10"] / moments["m00"])  # Coordenada x do centro de massa
-                            cy = int(moments["m01"] / moments["m00"])  # Coordenada y do centro de massa
+                            # Verifica se a área (M["m00"]) não é zero para evitar divisão por zero
+                            if moments["m00"] != 0:
+                                cx = int(moments["m10"] / moments["m00"])  # Coordenada x do centro de massa
+                                cy = int(moments["m01"] / moments["m00"])  # Coordenada y do centro de massa
         return cx, cy
 
 
@@ -684,6 +701,37 @@ class MainWindow(QMainWindow):
         # # Salvando em um arquivo JSON
         # with open(os.path.join(self.img_path, "dados.json"), "w", encoding="utf-8") as f:
         #     json.dump(self.data, f, default=ndarray_converter, ensure_ascii=False, indent=4)
+
+    def delete_current_object(self):
+        # Remove o obj_id atual de todos os frames
+        obj_id_str = str(self.obj_id)
+        for key in list(self.data.keys()):
+            if isinstance(self.data[key], dict) and obj_id_str in self.data[key]:
+                del self.data[key][obj_id_str]
+        # Remove do dicionário de IDs
+        if obj_id_str in self.objs_ids:
+            del self.objs_ids[obj_id_str]
+        # Atualiza o ID atual para o menor disponível ou 1
+        if self.objs_ids:
+            self.obj_id = int(sorted(self.objs_ids.keys(), key=int)[0])
+        else:
+            self.obj_id = 1
+            self.objs_ids = {str(self.obj_id): None}
+        self.input_points.clear()
+        self.input_labels.clear()
+        self.predictor.reset_state(self.inference_state)
+        self.update_image([self.obj_id])
+
+    def closeEvent(self, event):
+        # Salva os dados normalmente
+        self.save_data()
+        # Cria uma cópia com timestamp
+        data_path = os.path.join(self.img_path, "data.pkl")
+        if os.path.exists(data_path):
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.join(self.img_path, f"data_{timestamp}.pkl")
+            shutil.copy2(data_path, backup_path)
+        event.accept()
 
 
 app = QApplication(sys.argv)

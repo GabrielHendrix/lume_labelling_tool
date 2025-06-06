@@ -187,6 +187,7 @@ class InputDialog(QDialog):
         self.img_path = ""
         self.outdir = "/home/lume/Desktop/"
         self.camera_id = 1
+        self.selected_data_file = None
         self.layout = QVBoxLayout()
 
         # Caminho da imagem
@@ -209,6 +210,18 @@ class InputDialog(QDialog):
         self.layout.addWidget(self.img_path_title)
         self.layout.addWidget(self.img_path_edit)
         self.layout.addWidget(self.img_path_btn)
+
+        # ComboBox para seleção de arquivo data
+        self.data_file_combo = QComboBox()
+        self.data_file_combo.addItem("(usar o mais recente)")
+        self.data_file_combo.setEnabled(False)
+        self.data_file_combo_label = QLabel("Selecionar arquivo de dados (opcional):")
+        self.layout.addWidget(self.data_file_combo_label)
+        self.layout.addWidget(self.data_file_combo)
+        self.data_file_combo.setVisible(False)
+        self.data_file_combo_label.setVisible(False)
+        self.img_path_edit.textChanged.connect(self.update_data_file_combo)
+        self.data_file_combo.currentIndexChanged.connect(self.on_data_file_selected)
 
         self.outdir_title = QLabel("Caminho de Saída:")
         self.layout.addWidget(self.outdir_title)
@@ -252,8 +265,35 @@ class InputDialog(QDialog):
         if folder:
             self.outdir_edit.setText(folder)
 
+    def update_data_file_combo(self):
+        # Limpa e atualiza a combobox com arquivos data_*.pkl do diretório
+        folder = self.img_path_edit.text().strip()
+        self.data_file_combo.clear()
+        self.data_file_combo.addItem("(usar o mais recente)")
+        self.selected_data_file = None
+        if os.path.isdir(folder):
+            self.data_file_combo.setVisible(True)
+            self.data_file_combo_label.setVisible(True)
+            self.data_file_combo.setEnabled(True)
+            data_files = [f for f in os.listdir(folder) if f.startswith("data_") and f.endswith(".pkl")]
+            data_files = sorted(data_files, reverse=True)
+            for f in data_files:
+                self.data_file_combo.addItem(f)
+        else:
+            self.data_file_combo.setVisible(False)
+            self.data_file_combo_label.setVisible(False)
+            self.data_file_combo.setEnabled(False)
+
+    def on_data_file_selected(self, idx):
+        if idx == 0:
+            self.selected_data_file = None
+        else:
+            folder = self.img_path_edit.text().strip()
+            filename = self.data_file_combo.currentText()
+            self.selected_data_file = os.path.join(folder, filename)
+
     def get_paths(self):
-        return self.img_path_edit.text().strip(), self.outdir_edit.text().strip(), self.is_checked, int(self.camera_id)
+        return self.img_path_edit.text().strip(), self.outdir_edit.text().strip(), self.is_checked, int(self.camera_id), self.selected_data_file
 
 
     def toggle_outdir_edit(self, state):
@@ -281,7 +321,7 @@ class InputDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, img_path):
+    def __init__(self, img_path, selected_data_file=None):
         super().__init__()
 
         self.setWindowTitle("Visualizador de Imagens")
@@ -298,6 +338,7 @@ class MainWindow(QMainWindow):
         self.data = {}
         self.all_classes = ["pedestrian", "car", "truck", "bus"]  # Exemplo
         self.interval = 100
+        self.selected_data_file = selected_data_file
 
         if os.path.isfile(self.img_path):
             if self.img_path.endswith('txt'):
@@ -311,11 +352,24 @@ class MainWindow(QMainWindow):
         # self.filenames.sort()
         self.filenames = natsorted(self.filenames)
 
-        if os.path.isfile((os.path.join(self.img_path, "data.pkl"))):
-            self.load_data()
+        # Seleção do arquivo de dados
+        data_file_to_load = None
+        if self.selected_data_file and os.path.isfile(self.selected_data_file):
+            data_file_to_load = self.selected_data_file
+        else:
+            # Busca o arquivo data_*.pkl mais recente
+            data_files = [f for f in os.listdir(self.img_path) if f.startswith("data_") and f.endswith(".pkl")]
+            if data_files:
+                data_files = sorted(data_files, reverse=True)
+                data_file_to_load = os.path.join(self.img_path, data_files[0])
+            elif os.path.isfile((os.path.join(self.img_path, "data.pkl"))):
+                data_file_to_load = os.path.join(self.img_path, "data.pkl")
+
+        if data_file_to_load:
+            self.load_data(data_file_to_load)
         else:
             self.objs_ids = {'1':None}
-            self.data.update({'objs_ids': self.objs_ids})        
+            self.data.update({'objs_ids': self.objs_ids})
         # self.filenames = self.filenames[self.idx:self.idx+self.interval]
         self.inference_state = self.predictor.init_state(video_path=self.img_path, frame_names=self.filenames[self.idx:(self.idx + self.interval)], index=self.idx)
 
@@ -690,8 +744,10 @@ class MainWindow(QMainWindow):
             pickle.dump(self.data, f)
 
 
-    def load_data(self):
-        with open(os.path.join(self.img_path, "data.pkl"), "rb") as f:
+    def load_data(self, data_file=None):
+        if data_file is None:
+            data_file = os.path.join(self.img_path, "data.pkl")
+        with open(data_file, "rb") as f:
             self.data = pickle.load(f)
         # for i, file in enumerate(self.filenames):
         key = str(self.filenames[self.idx].split("/")[-1])
@@ -739,14 +795,14 @@ app = QApplication(sys.argv)
 # Abre o diálogo inicial
 dialog = InputDialog()
 if dialog.exec():
-    img_path, outdir, from_log, camera_id = dialog.get_paths()
+    img_path, outdir, from_log, camera_id, selected_data_file = dialog.get_paths()
     if from_log:
         outdir = os.path.join(outdir, img_path.split("/")[-1])
         image_conversor = ImagesFromLog(img_path, outdir, camera_id)
         image_conversor.process()
         img_path = outdir
     if img_path:
-        window = MainWindow(img_path)
+        window = MainWindow(img_path, selected_data_file=selected_data_file)
         window.show()
         sys.exit(app.exec())
     else:
